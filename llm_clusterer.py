@@ -68,16 +68,17 @@ class LLMClusterOptimizer:
                  get_cluster_summary: Callable[[list[str]], str] = None,
                  calculate_clustering_score: Callable[[list[SummarizedCluster]], float] = None,
                  cosine_distance_thresholds_to_combine: Sequence[float] = None,
-                 summary_sample_size=5, num_embed_workers=50, verbose=True):
+                 summary_sample_size=5, num_summarization_workers=25, num_embed_workers=50, verbose=True):
         """
         :param cluster_models: list of SKlearn cluster model instances (aka ClusterMixins) to choose from. Each item can be either a ClusterMixin or a Callable that takes a list of embeddings and returns a ClusterMixin. Use the latter if the ClusterMixin requires n clusters as a parameter. The callable should use the embeddings to determine the optimal n. Use `util.guess_optimal_n_clusters()`.
         :param embedding_fn: Function that takes a strings and returns its embedding.
         :param recluster_model: ClusterMixin to be used for reclustering results during optimization stages. Ideally returns clusters that are too small. If not passed, AffinityPropagation(damping=0.7) will be used.
-        :param get_cluster_summary: Functon that takes a list of strings which are samples from a cluster and returns a summary of them. If not passed `_default_get_cluster_summary()` will be used.
+        :param get_cluster_summary: Functon that takes a list of strings which are samples from a cluster and returns a summary of them. If not passed `_default_get_cluster_summary()` will be used. If using default, make sure OpenAI API key is setup in envvars.
         :param calculate_clustering_score: Function that takes a list of `SummarizedCluster` and returns a float that represents how good the clustering is, higher is better. If not passed `self._default_calculate_clustering_score()` is used.
         :param cosine_distance_thresholds_to_combine: List of floats that represent maximum cosine distance between cluster summary embeddings where clusters should be combined. Best threshold will be chosen based on `calculate_clustering_score()`.
         :param summary_sample_size: Number of items to sample from a cluster
-        :param num_embed_workers: Number of workers to use when running `embedding_fn`. Be aware of rate limits depending on the LLM provider being used.
+        :param num_summarization_workers: Number of workers to use when running `get_cluster_summary()`. Be aware of rate limits depending on the LLM provider being used.
+        :param num_embed_workers: Number of workers to use when running `embedding_fn()`. Be aware of rate limits depending on the LLM provider being used.
         :param verbose: Output logs to console
         """
         self._cluster_models = cluster_models
@@ -87,6 +88,7 @@ class LLMClusterOptimizer:
         self._calculate_clustering_score = calculate_clustering_score or self._default_calculate_clustering_score
         self._cosine_distance_thresholds_to_combine = cosine_distance_thresholds_to_combine or [0.2, 0.25, 0.3]
         self._summary_sample_size = summary_sample_size
+        self._num_summarization_workers = num_summarization_workers
         self._num_embed_workers = num_embed_workers
         self._verbose = verbose
 
@@ -169,7 +171,7 @@ class LLMClusterOptimizer:
 
     def _summarize_clusters(self, clusters: Sequence[SummarizedCluster], **kwargs) -> list[SummarizedCluster]:
         return run_parallel(clusters, partial(self._summarize_cluster, **kwargs),
-                            max_workers=25, desc='summarize source clusters', disable=not self._verbose)
+                            max_workers=self._num_summarization_workers, desc='summarize source clusters', disable=not self._verbose)
 
     def _embed_parallel(self, items: Sequence[str], **kwargs):
         return run_parallel(items, self._embedding_fn, max_workers=self._num_embed_workers, disable=not self._verbose, **kwargs)
