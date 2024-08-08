@@ -1,4 +1,4 @@
-from typing import Sequence
+from typing import Sequence, Union, Callable
 from functools import reduce, partial
 from sklearn.metrics import pairwise_distances
 from sklearn.cluster import AffinityPropagation
@@ -24,7 +24,7 @@ class SummarizedCluster:
         return SummarizedCluster(self.label, self.embeddings + other.embeddings, self.items + other.items, self.summary)
 
     def set_summary(self, summary: str) -> None:
-        self.summary = summary
+        self.summary = summary.strip()
 
     @property
     def labels(self) -> list[int]:
@@ -63,8 +63,8 @@ def _default_get_cluster_summary(strs_to_summarize: Sequence[str]) -> str:
 
 class LLMClusterOptimizer:
 
-    def __init__(self, cluster_models: Sequence[ClusterMixin], embedding_fn, recluster_model=None, get_cluster_summary=None,
-                 summary_sample_size=5, num_embed_workers=50, verbose=True):
+    def __init__(self, cluster_models: Sequence[Union[ClusterMixin, Callable[[ndarray], ClusterMixin]]], embedding_fn, recluster_model=None, get_cluster_summary=None,
+                 summary_sample_size=5, num_embed_workers=50, verbose=True, OPTIMIZE=False):
         """
 
         :param cluster_models: list of SKlearn cluster model instances (from `sklearn.cluster`) to choose from.
@@ -82,6 +82,12 @@ class LLMClusterOptimizer:
         self._num_embed_workers = num_embed_workers
         self._verbose = verbose
 
+    @staticmethod
+    def _get_labels(embeddings: ndarray, cluster_model: Union[ClusterMixin, Callable[[ndarray], ClusterMixin]]) -> ndarray:
+        if callable(cluster_model):
+            cluster_model = cluster_model(embeddings)
+        return cluster_model.fit_predict(embeddings)
+
     def fit_predict_text(self, texts: Sequence[str]) -> ndarray:
         """
         Mimics `sklearn.base.ClusterMixin.fit_predict()`. Given a sequence of texts, returns the cluster labels for each text.
@@ -95,7 +101,7 @@ class LLMClusterOptimizer:
         chosen_model = None
         for imodel, cluster_model in enumerate(self._cluster_models):
             print("Clustering model: {}".format(cluster_model))
-            curr_labels = cluster_model.fit_predict(embeddings)
+            curr_labels = self._get_labels(embeddings, cluster_model)
             curr_clusters = self._build_clusters(curr_labels, embeddings, texts)
             summarized_clusters = self._summarize_clusters(curr_clusters)
             summarized_clusters = self._optimize_collapse_similar_clusters(summarized_clusters)
