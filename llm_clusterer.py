@@ -63,44 +63,50 @@ def _default_get_cluster_summary(strs_to_summarize: Sequence[str]) -> str:
 
 class LLMClusterOptimizer:
 
-    def __init__(self, cluster_models: Sequence[Union[ClusterMixin, Callable[[ndarray], ClusterMixin]]], embedding_fn, recluster_model=None, get_cluster_summary=None,
-                 summary_sample_size=5, num_embed_workers=50, verbose=True, OPTIMIZE=False):
+    def __init__(self, cluster_models: Sequence[Union[ClusterMixin, Callable[[ndarray], ClusterMixin]]],
+                 embedding_fn: Callable[[str], ndarray], recluster_model: ClusterMixin = None,
+                 get_cluster_summary: Callable[[list[str]], str] = None,
+                 calculate_clustering_score: Callable[[list[SummarizedCluster]], float] = None,
+                 cosine_distance_thresholds_to_combine: Sequence[float] = None,
+                 summary_sample_size=5, num_embed_workers=50, verbose=True):
         """
-
-        :param cluster_models: list of SKlearn cluster model instances (from `sklearn.cluster`) to choose from.
-        :param embedding_fn:
-        :param get_cluster_summary:
-        :param summary_sample_size: Maximum number of items to sample from a cluster. If len(cluster) < sample_size,
-        then all items in the cluster will be chosen.
-        :param verbose:
+        :param cluster_models: list of SKlearn cluster model instances (aka ClusterMixins) to choose from. Each item can be either a ClusterMixin or a Callable that takes a list of embeddings and returns a ClusterMixin. Use the latter if the ClusterMixin requires n clusters as a parameter. The callable should use the embeddings to determine the optimal n. Use `util.guess_optimal_n_clusters()`.
+        :param embedding_fn: Function that takes a strings and returns its embedding.
+        :param recluster_model: ClusterMixin to be used for reclustering results during optimization stages. Ideally returns clusters that are too small. If not passed, AffinityPropagation(damping=0.7) will be used.
+        :param get_cluster_summary: Functon that takes a list of strings which are samples from a cluster and returns a summary of them. If not passed `_default_get_cluster_summary()` will be used.
+        :param calculate_clustering_score: Function that takes a list of `SummarizedCluster` and returns a float that represents how good the clustering is, higher is better. If not passed `self._default_calculate_clustering_score()` is used.
+        :param cosine_distance_thresholds_to_combine: List of floats that represent maximum cosine distance between cluster summary embeddings where clusters should be combined. Best threshold will be chosen based on `calculate_clustering_score()`.
+        :param summary_sample_size: Number of items to sample from a cluster
+        :param num_embed_workers: Number of workers to use when running `embedding_fn`. Be aware of rate limits depending on the LLM provider being used.
+        :param verbose: Output logs to console
         """
         self._cluster_models = cluster_models
         self._recluster_model = recluster_model or AffinityPropagation(damping=0.7)
         self._embedding_fn = embedding_fn
-        self._get_cluster_summary = get_cluster_summary
+        self._get_cluster_summary = get_cluster_summary or _default_get_cluster_summary
+        self._calculate_clustering_score = calculate_clustering_score or self._default_calculate_clustering_score
+        self._cosine_distance_thresholds_to_combine = cosine_distance_thresholds_to_combine or [0.2, 0.25, 0.3]
         self._summary_sample_size = summary_sample_size
         self._num_embed_workers = num_embed_workers
         self._verbose = verbose
 
-    @staticmethod
-    def _get_labels(embeddings: ndarray, cluster_model: Union[ClusterMixin, Callable[[ndarray], ClusterMixin]]) -> ndarray:
-        if callable(cluster_model):
-            cluster_model = cluster_model(embeddings)
-        return cluster_model.fit_predict(embeddings)
-
     def fit_predict_text(self, texts: Sequence[str]) -> ndarray:
         """
         Mimics `sklearn.base.ClusterMixin.fit_predict()`. Given a sequence of texts, returns the cluster labels for each text.
-        Considers
-        :param texts:
-        :return:
+        Chooses best of `cluster_models` passed in `__init__()` based on `calculate_clustering_score()`
+        Post-processes clusters so that:
+        - large clusters are broken up
+        - small clusters are combined based on similarity
+        :param texts: List of strings to cluster.
+        :return: List of cluster labels of shape `(len(texts),)`
         """
         embeddings = self._embed_parallel(texts, desc="Embedding input texts")
         best_clusters = None
         highest_clustering_score = 0
         chosen_model = None
         for imodel, cluster_model in enumerate(self._cluster_models):
-            print("Clustering model: {}".format(cluster_model))
+            if self._verbose:
+                print("Clustering model: {}".format(cluster_model))
             curr_labels = self._get_labels(embeddings, cluster_model)
             curr_clusters = self._build_clusters(curr_labels, embeddings, texts)
             summarized_clusters = self._summarize_clusters(curr_clusters)
@@ -113,7 +119,13 @@ class LLMClusterOptimizer:
         if self._verbose:
             print("Highest clustering score", highest_clustering_score)
             print("Best model", chosen_model)
-        return np.array(reduce(lambda x, y: x + y.labels, best_clusters, [])), best_clusters
+        return np.array(reduce(lambda x, y: x + y.labels, best_clusters, []))
+
+    @staticmethod
+    def _get_labels(embeddings: ndarray, cluster_model: Union[ClusterMixin, Callable[[ndarray], ClusterMixin]]) -> ndarray:
+        if callable(cluster_model):
+            cluster_model = cluster_model(embeddings)
+        return cluster_model.fit_predict(embeddings)
 
     @staticmethod
     def _build_clusters_from_cluster_results(labels: ndarray, embeddings: ndarray, items: ndarray) -> (list[SummarizedCluster], list, ndarray):
@@ -150,9 +162,8 @@ class LLMClusterOptimizer:
         if len(cluster) == 1:
             summary = cluster.items[0]
         else:
-            get_cluster_summary = self._get_cluster_summary or _default_get_cluster_summary
             sample = random.sample(cluster.items, min(len(cluster), self._summary_sample_size))
-            summary = get_cluster_summary(sample)
+            summary = self._get_cluster_summary(sample)
         cluster.set_summary(summary)
         return cluster
 
@@ -172,7 +183,7 @@ class LLMClusterOptimizer:
         distances = pairwise_distances(embeddings, metric='cosine')
         highest_clustering_score = 0
         best_clusters = None
-        for threshold in [0.2, 0.25, 0.3]:
+        for threshold in self._cosine_distance_thresholds_to_combine:
             temp_clusters = self._collapse_similar_clusters(clusters, distances, threshold)
             temp_score = self._calculate_clustering_score(temp_clusters)
             if temp_score > highest_clustering_score:
@@ -197,7 +208,13 @@ class LLMClusterOptimizer:
             new_clusters.append(curr_cluster)
         return new_clusters
 
-    def _calculate_clustering_score(self, summarized_clusters: Sequence[SummarizedCluster]) -> float:
+    def _default_calculate_clustering_score(self, summarized_clusters: Sequence[SummarizedCluster]) -> float:
+        """
+        Default method to calculate score for how good clusters are, higher is better.
+        Calculates the average minimum pairwise cosine distance between cluster summary embeddings.
+        :param summarized_clusters:
+        :return:
+        """
         embeddings = self._embed_cluster_summaries(summarized_clusters)
         distances = pairwise_distances(embeddings, metric='cosine')
         np.fill_diagonal(distances, np.inf)
