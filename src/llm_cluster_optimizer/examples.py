@@ -36,7 +36,7 @@ def build_optimizer():
         HDBSCAN(min_cluster_size=2, min_samples=1, cluster_selection_method="leaf", cluster_selection_epsilon=0.5),
         AffinityPropagation(damping=0.7, max_iter=1000, convergence_iter=100),
     ]
-    return LLMClusterOptimizer(options, embed_text_openai, recluster_model, verbose=True, OPTIMIZE=True)
+    return LLMClusterOptimizer(options, embed_text_openai, recluster_model, verbose=True)
 
 
 def run_example(slug):
