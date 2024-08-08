@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "llm_cluster_optimizer"
-version = "0.0.1"
+version = "0.9.0"
 authors = [
   { name="Noah Santacruz", email="noahssantacruz@gmail.com" },
 ]
