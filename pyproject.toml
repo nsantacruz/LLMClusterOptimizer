@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "llm_cluster_optimizer"
+version = "0.0.1"
+authors = [
+  { name="Noah Santacruz", email="noahssantacruz@gmail.com" },
+]
+description = "A drop-in replacement for sklearn clustering models, this package optimizes sklearn clusters using LLMs"
+keywords = ["LLM", "text clustering", "kmeans"]
+dependencies = [
+    "scikit-learn",
+    "numpy",
+    "langchain_openai",
+    "langchain_community",
+    "tqdm"
+]
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/nsantacruz/LLMClusterOptimizer"
+Issues = "https://github.com/nsantacruz/LLMClusterOptimizer/issues"
