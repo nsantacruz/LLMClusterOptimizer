@@ -51,7 +51,7 @@ class SummarizedCluster:
 
 
 def _default_get_cluster_summary(strs_to_summarize: Sequence[str]) -> str:
-    llm = ChatOpenAI(model="gpt-4o", temperature=0)
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
     system = SystemMessage(content="Given a few ideas (wrapped in <idea> "
                                    "XML tags) output a summary of the"
                                    "ideas. Wrap the output in <summary> tags. Summary"
